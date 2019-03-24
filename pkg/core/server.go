@@ -2,19 +2,23 @@ package core
 
 import (
 	"fmt"
+	"github.com/Knetic/govaluate"
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
+	"github.com/gin-gonic/gin/json"
 	"github.com/satori/go.uuid"
+	"github.com/tidwall/gjson"
 	"gopkg.in/resty.v1"
 	"io"
+	"strings"
 )
 
 type Topic string
 type SubscriptionId string
 
 type TopicMessage struct {
-	Topic   Topic                  `json:"topic"`
-	Payload map[string]interface{} `json:"payload"`
+	Topic   Topic       `json:"topic"`
+	Payload interface{} `json:"payload"`
 }
 
 type Subscription struct {
@@ -27,16 +31,41 @@ type Subscription struct {
 
 func (s *Subscription) subscriptionWorker() {
 	for m := range s.Queue {
-		if s.Callback != "" {
-			_, err := resty.R().
-				SetHeader("Content-Type", "application/json").
-				SetBody(m).
-				Post(s.Callback)
+		evaluated := true
+		if s.Filter != "" {
+			bytes, err := json.Marshal(m.Payload)
 			if err != nil {
-				fmt.Print(err)
+				continue
 			}
-		} else if s.SSEStream != nil {
-			s.SSEStream <- m
+
+			functions := map[string]govaluate.ExpressionFunction{
+				"F": func(args ...interface{}) (interface{}, error) {
+					fieldExp := args[0].(string)
+					if strings.HasPrefix(fieldExp, "@") {
+						fieldExp = "\\" + fieldExp
+					}
+					result := gjson.GetBytes(bytes, fieldExp)
+					return result.Value(), nil
+				},
+			}
+
+			expression, _ := govaluate.NewEvaluableExpressionWithFunctions(s.Filter, functions)
+			result, _ := expression.Evaluate(nil)
+			evaluated = result.(bool)
+		}
+
+		if evaluated {
+			if s.Callback != "" {
+				_, err := resty.R().
+					SetHeader("Content-Type", "application/json").
+					SetBody(m).
+					Post(s.Callback)
+				if err != nil {
+					fmt.Print(err)
+				}
+			} else if s.SSEStream != nil {
+				s.SSEStream <- m
+			}
 		}
 	}
 }
@@ -160,6 +189,7 @@ func (h *HandlerContext) handleSubscribe(c *gin.Context) {
 		c.JSON(400, gin.H{
 			"error": "invalid subscription",
 		})
+		return
 	}
 
 	subscriptionId := h.registerSubscription(&subscription)
