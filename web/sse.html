@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>Using SSE(Server-sent event)</title>
+<meta charset="utf-8">
+</head>
+<body>
+
+<h1>Getting server updates</h1>
+<div id="result"></div>
+
+<script>
+if(typeof(EventSource) !== "undefined") {
+    var source = new EventSource("http://localhost:8080/subscribe/7fbd4237-d5b7-4e71-b4db-77323cd49b4d/sse");
+    source.onmessage = function(event) {  
+        console.log(JSON.parse(event.data));
+    };
+} else {
+    document.getElementById("result").innerHTML = "Sorry, your browser does not support server-sent events...";
+}
+</script>
+
+</body>
+</html>
+
