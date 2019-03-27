@@ -22,78 +22,104 @@ type TopicMessage struct {
 }
 
 type Subscription struct {
+	Id        SubscriptionId
 	Topic     Topic  `json:"topic"`
 	Filter    string `json:"filter"`
 	Callback  string `json:"callback"`
-	Queue     chan TopicMessage
-	SSEStream chan TopicMessage
+	Queue     chan *TopicMessage
+	SSEStream chan *TopicMessage
+}
+
+func (s *Subscription) processDelivery(m *TopicMessage) {
+	evaluated := true
+
+	if s.Filter != "" {
+		bytes, err := json.Marshal(m.Payload)
+		if err != nil {
+			return
+		}
+
+		functions := map[string]govaluate.ExpressionFunction{
+			"F": func(args ...interface{}) (interface{}, error) {
+				fieldExp := args[0].(string)
+				if strings.HasPrefix(fieldExp, "@") {
+					fieldExp = "\\" + fieldExp
+				}
+				result := gjson.GetBytes(bytes, fieldExp)
+				return result.Value(), nil
+			},
+		}
+
+		expression, _ := govaluate.NewEvaluableExpressionWithFunctions(s.Filter, functions)
+		result, _ := expression.Evaluate(nil)
+		evaluated = result.(bool)
+	}
+
+	if !evaluated {
+		return
+	}
+
+	if s.Callback != "" {
+		_, err := resty.R().
+			SetHeader("Content-Type", "application/json").
+			SetBody(m).
+			Post(s.Callback)
+		if err != nil {
+			fmt.Print(err)
+		}
+	} else if s.SSEStream != nil {
+		s.SSEStream <- m
+	}
 }
 
 func (s *Subscription) subscriptionWorker() {
-	for m := range s.Queue {
-		evaluated := true
-		if s.Filter != "" {
-			bytes, err := json.Marshal(m.Payload)
-			if err != nil {
-				continue
-			}
-
-			functions := map[string]govaluate.ExpressionFunction{
-				"F": func(args ...interface{}) (interface{}, error) {
-					fieldExp := args[0].(string)
-					if strings.HasPrefix(fieldExp, "@") {
-						fieldExp = "\\" + fieldExp
-					}
-					result := gjson.GetBytes(bytes, fieldExp)
-					return result.Value(), nil
-				},
-			}
-
-			expression, _ := govaluate.NewEvaluableExpressionWithFunctions(s.Filter, functions)
-			result, _ := expression.Evaluate(nil)
-			evaluated = result.(bool)
-		}
-
-		if evaluated {
-			if s.Callback != "" {
-				_, err := resty.R().
-					SetHeader("Content-Type", "application/json").
-					SetBody(m).
-					Post(s.Callback)
-				if err != nil {
-					fmt.Print(err)
-				}
-			} else if s.SSEStream != nil {
-				s.SSEStream <- m
-			}
+	for {
+		m, more := <-s.Queue
+		if more {
+			s.processDelivery(m)
+		} else {
+			break
 		}
 	}
 }
 
 type TopicMessageInbox struct {
-	Queue         chan TopicMessage
-	Subscriptions []*Subscription
+	Subscriptions map[SubscriptionId]*Subscription
+	Queue         chan *TopicMessage
 }
 
 func (i *TopicMessageInbox) topicMessageInboxWorker() {
-	for m := range i.Queue {
-		for _, s := range i.Subscriptions {
-			s.Queue <- m
+	for {
+		m, more := <-i.Queue
+		if more {
+			for _, s := range i.Subscriptions {
+				s.Queue <- m
+			}
+		} else {
+			break
 		}
 	}
 }
 
-func (i *TopicMessageInbox) addSubscription(sub *Subscription) SubscriptionId {
-	sub.Queue = make(chan TopicMessage, 100)
-	if sub.Callback == "" {
-		sub.SSEStream = make(chan TopicMessage, 100)
+func (i *TopicMessageInbox) addSubscription(s *Subscription) SubscriptionId {
+	s.Queue = make(chan *TopicMessage, 100)
+	if s.Callback == "" {
+		s.SSEStream = make(chan *TopicMessage, 100)
 	}
 
-	subId := SubscriptionId(uuid.NewV4().String())
-	i.Subscriptions = append(i.Subscriptions, sub)
-	go sub.subscriptionWorker()
+	s.Id = SubscriptionId(uuid.NewV4().String())
+	i.Subscriptions[s.Id] = s
+	go s.subscriptionWorker()
 
-	return subId
+	return s.Id
+}
+
+func (i *TopicMessageInbox) delSubscription(s *Subscription) {
+	close(s.Queue)
+	if s.SSEStream != nil {
+		close(s.SSEStream)
+	}
+	delete(i.Subscriptions, s.Id)
 }
 
 type HandlerContext struct {
@@ -103,8 +129,8 @@ type HandlerContext struct {
 
 func (h *HandlerContext) createTopicMessageInbox(t Topic) *TopicMessageInbox {
 	inbox := TopicMessageInbox{
-		make(chan TopicMessage, 1000),
-		make([]*Subscription, 0),
+		make(map[SubscriptionId]*Subscription, 0),
+		make(chan *TopicMessage, 1000),
 	}
 	h.TopicMsgInbox[t] = &inbox
 	go inbox.topicMessageInboxWorker()
@@ -145,13 +171,13 @@ func (h *HandlerContext) getTopicMessageInbox(t Topic) *TopicMessageInbox {
 	return nil
 }
 
-func (h *HandlerContext) registerSubscription(sub *Subscription) SubscriptionId {
-	inbox := h.getTopicMessageInbox(sub.Topic)
+func (h *HandlerContext) registerSubscription(s *Subscription) SubscriptionId {
+	inbox := h.getTopicMessageInbox(s.Topic)
 	if inbox == nil {
-		inbox = h.createTopicMessageInbox(sub.Topic)
+		inbox = h.createTopicMessageInbox(s.Topic)
 	}
-	subId := inbox.addSubscription(sub)
-	h.Subscriptions[subId] = sub
+	subId := inbox.addSubscription(s)
+	h.Subscriptions[subId] = s
 	return subId
 }
 
@@ -161,8 +187,8 @@ func (h *HandlerContext) validateTopicMsg(message *TopicMessage) bool {
 		h.isSubscribedTopic(message.Topic)
 }
 
-func (h *HandlerContext) validateSubscription(sub *Subscription) bool {
-	return true
+func (h *HandlerContext) validateSubscription(s *Subscription) bool {
+	return s.Topic != ""
 }
 
 func (h *HandlerContext) handlePublish(c *gin.Context) {
@@ -176,7 +202,7 @@ func (h *HandlerContext) handlePublish(c *gin.Context) {
 	}
 
 	if inbox := h.getTopicMessageInbox(message.Topic); inbox != nil {
-		inbox.Queue <- message
+		inbox.Queue <- &message
 	}
 
 	c.JSON(202, gin.H{})
@@ -194,7 +220,7 @@ func (h *HandlerContext) handleSubscribe(c *gin.Context) {
 
 	subscriptionId := h.registerSubscription(&subscription)
 
-	c.JSON(201, gin.H{"subscriptionId": subscriptionId})
+	c.JSON(202, gin.H{"subscriptionId": subscriptionId})
 }
 
 func (h *HandlerContext) handleSubscribeSSE(c *gin.Context) {
@@ -207,7 +233,7 @@ func (h *HandlerContext) handleSubscribeSSE(c *gin.Context) {
 	}
 
 	subscriptionId := SubscriptionId(p.Value)
-	subscription, ok := h.Subscriptions[subscriptionId]
+	s, ok := h.Subscriptions[subscriptionId]
 	if !ok {
 		c.JSON(400, gin.H{
 			"error": "no such subscription",
@@ -216,12 +242,43 @@ func (h *HandlerContext) handleSubscribeSSE(c *gin.Context) {
 	}
 
 	c.Stream(func(w io.Writer) bool {
-		if msg, ok := <-subscription.SSEStream; ok {
+		if msg, more := <-s.SSEStream; more {
 			c.SSEvent("message", msg)
 			return true
 		}
 		return false
 	})
+}
+
+func (h *HandlerContext) closeSubscription(s *Subscription, subscriptionId SubscriptionId) {
+	i, ok := h.TopicMsgInbox[s.Topic]
+	if ok {
+		i.delSubscription(s)
+	}
+	delete(h.Subscriptions, subscriptionId)
+}
+
+func (h *HandlerContext) handleSubscribeCancel(c *gin.Context) {
+	p := c.Params[0]
+	if p.Key != "subId" || p.Value == "" {
+		c.JSON(400, gin.H{
+			"error": "invalid subscription",
+		})
+		return
+	}
+
+	subscriptionId := SubscriptionId(p.Value)
+	s, ok := h.Subscriptions[subscriptionId]
+	if !ok {
+		c.JSON(400, gin.H{
+			"error": "no such subscription",
+		})
+		return
+	}
+
+	h.closeSubscription(s, subscriptionId)
+
+	c.JSON(202, gin.H{})
 }
 
 func setupRouter(handlerCtx *HandlerContext) *gin.Engine {
@@ -230,5 +287,6 @@ func setupRouter(handlerCtx *HandlerContext) *gin.Engine {
 	r.POST("/publish", handlerCtx.handlePublish)
 	r.POST("/subscribe", handlerCtx.handleSubscribe)
 	r.GET("/subscribe/:subId/sse", handlerCtx.handleSubscribeSSE)
+	r.POST("/subscribe/:subId/cancel", handlerCtx.handleSubscribeCancel)
 	return r
 }

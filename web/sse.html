@@ -7,16 +7,57 @@
 <body>
 
 <h1>Getting server updates</h1>
+<div>
+    <input id="topic" type="text" placeholder="topic name" />
+    <input id="filter" type="text" placeholder='F("@metadata.version") == "1.2.3"' style="width: 300px"; />
+    <button title="Subscribe" onclick="onSubscribe()">Subscribe</button>
+</div>
 <div id="result"></div>
 
 <script>
-if(typeof(EventSource) !== "undefined") {
-    var source = new EventSource("http://localhost:8080/subscribe/7fbd4237-d5b7-4e71-b4db-77323cd49b4d/sse");
-    source.onmessage = function(event) {  
-        console.log(JSON.parse(event.data));
-    };
-} else {
+if (typeof(EventSource) === "undefined") {
     document.getElementById("result").innerHTML = "Sorry, your browser does not support server-sent events...";
+}
+
+let prevSubId = null;
+
+function subscribe() {
+    let topic = document.getElementById("topic").value;
+    let filter = document.getElementById("filter").value;
+    fetch("http://localhost:8080/subscribe", {
+        method: "POST",
+        body: JSON.stringify({topic: topic, filter: filter}),
+    }).then(res => {
+        res.json().then(data => {
+            let source = new EventSource(`http://localhost:8080/subscribe/${data.subscriptionId}/sse`);
+            source.onmessage = function(event) {
+                let node = document.createElement("DIV");
+                node.innerText = event.data;
+                document.getElementById("result").appendChild(node);
+            };
+            source.onerror = function(event) {
+                if (event.eventPhase === EventSource.CLOSED) {
+                    console.log('event source closed');
+                    source.close();
+                }
+            };
+            prevSubId = data.subscriptionId;
+        })
+    });
+}
+
+function onSubscribe() {
+    if (prevSubId !== null) {
+        fetch(`http://localhost:8080/subscribe/${prevSubId}/cancel`, {
+            method: "POST",
+        }).then(res => {
+            res.json().then(_ => {
+                subscribe();
+            })
+        });
+    } else {
+        subscribe();
+    }
 }
 </script>
 
