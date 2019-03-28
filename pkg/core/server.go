@@ -11,6 +11,7 @@ import (
 	"gopkg.in/resty.v1"
 	"io"
 	"strings"
+	"sync"
 )
 
 type Topic string
@@ -84,7 +85,7 @@ func (s *Subscription) subscriptionWorker() {
 }
 
 type TopicMessageInbox struct {
-	Subscriptions map[SubscriptionId]*Subscription
+	Subscriptions sync.Map
 	Queue         chan *TopicMessage
 }
 
@@ -92,9 +93,11 @@ func (i *TopicMessageInbox) topicMessageInboxWorker() {
 	for {
 		m, more := <-i.Queue
 		if more {
-			for _, s := range i.Subscriptions {
+			i.Subscriptions.Range(func(k, v interface{}) bool {
+				s := v.(*Subscription)
 				s.Queue <- m
-			}
+				return true
+			})
 		} else {
 			break
 		}
@@ -108,7 +111,7 @@ func (i *TopicMessageInbox) addSubscription(s *Subscription) SubscriptionId {
 	}
 
 	s.Id = SubscriptionId(uuid.NewV4().String())
-	i.Subscriptions[s.Id] = s
+	i.Subscriptions.Store(s.Id, s)
 	go s.subscriptionWorker()
 
 	return s.Id
@@ -119,26 +122,25 @@ func (i *TopicMessageInbox) delSubscription(s *Subscription) {
 	if s.SSEStream != nil {
 		close(s.SSEStream)
 	}
-	delete(i.Subscriptions, s.Id)
+	i.Subscriptions.Delete(s.Id)
 }
 
 type HandlerContext struct {
-	TopicMsgInbox map[Topic]*TopicMessageInbox
-	Subscriptions map[SubscriptionId]*Subscription
+	TopicMsgInbox sync.Map
+	Subscriptions sync.Map
 }
 
 func (h *HandlerContext) createTopicMessageInbox(t Topic) *TopicMessageInbox {
 	inbox := TopicMessageInbox{
-		make(map[SubscriptionId]*Subscription, 0),
-		make(chan *TopicMessage, 1000),
+		Queue: make(chan *TopicMessage, 1000),
 	}
-	h.TopicMsgInbox[t] = &inbox
+	h.TopicMsgInbox.Store(t, &inbox)
 	go inbox.topicMessageInboxWorker()
 	return &inbox
 }
 
 func (h *HandlerContext) isSubscribedTopic(t Topic) bool {
-	_, ok := h.TopicMsgInbox[t]
+	_, ok := h.TopicMsgInbox.Load(t)
 	return ok
 }
 
@@ -148,10 +150,7 @@ type Server struct {
 }
 
 func InitServer() *Server {
-	handlerCtx := HandlerContext{
-		make(map[Topic]*TopicMessageInbox),
-		make(map[SubscriptionId]*Subscription),
-	}
+	handlerCtx := HandlerContext{}
 
 	return &Server{
 		setupRouter(&handlerCtx),
@@ -165,8 +164,8 @@ func (s *Server) Run() (err error) {
 }
 
 func (h *HandlerContext) getTopicMessageInbox(t Topic) *TopicMessageInbox {
-	if inbox, ok := h.TopicMsgInbox[t]; ok {
-		return inbox
+	if inbox, ok := h.TopicMsgInbox.Load(t); ok {
+		return inbox.(*TopicMessageInbox)
 	}
 	return nil
 }
@@ -177,7 +176,7 @@ func (h *HandlerContext) registerSubscription(s *Subscription) SubscriptionId {
 		inbox = h.createTopicMessageInbox(s.Topic)
 	}
 	subId := inbox.addSubscription(s)
-	h.Subscriptions[subId] = s
+	h.Subscriptions.Store(subId, s)
 	return subId
 }
 
@@ -233,7 +232,7 @@ func (h *HandlerContext) handleSubscribeSSE(c *gin.Context) {
 	}
 
 	subscriptionId := SubscriptionId(p.Value)
-	s, ok := h.Subscriptions[subscriptionId]
+	s, ok := h.Subscriptions.Load(subscriptionId)
 	if !ok {
 		c.JSON(400, gin.H{
 			"error": "no such subscription",
@@ -242,7 +241,7 @@ func (h *HandlerContext) handleSubscribeSSE(c *gin.Context) {
 	}
 
 	c.Stream(func(w io.Writer) bool {
-		if msg, more := <-s.SSEStream; more {
+		if msg, more := <-s.(*Subscription).SSEStream; more {
 			c.SSEvent("message", msg)
 			return true
 		}
@@ -251,11 +250,11 @@ func (h *HandlerContext) handleSubscribeSSE(c *gin.Context) {
 }
 
 func (h *HandlerContext) closeSubscription(s *Subscription, subscriptionId SubscriptionId) {
-	i, ok := h.TopicMsgInbox[s.Topic]
+	i, ok := h.TopicMsgInbox.Load(s.Topic)
 	if ok {
-		i.delSubscription(s)
+		i.(*TopicMessageInbox).delSubscription(s)
 	}
-	delete(h.Subscriptions, subscriptionId)
+	h.Subscriptions.Delete(subscriptionId)
 }
 
 func (h *HandlerContext) handleSubscribeCancel(c *gin.Context) {
@@ -268,7 +267,7 @@ func (h *HandlerContext) handleSubscribeCancel(c *gin.Context) {
 	}
 
 	subscriptionId := SubscriptionId(p.Value)
-	s, ok := h.Subscriptions[subscriptionId]
+	s, ok := h.Subscriptions.Load(subscriptionId)
 	if !ok {
 		c.JSON(400, gin.H{
 			"error": "no such subscription",
@@ -276,7 +275,7 @@ func (h *HandlerContext) handleSubscribeCancel(c *gin.Context) {
 		return
 	}
 
-	h.closeSubscription(s, subscriptionId)
+	h.closeSubscription(s.(*Subscription), subscriptionId)
 
 	c.JSON(202, gin.H{})
 }
