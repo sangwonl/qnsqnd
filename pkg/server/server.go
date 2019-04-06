@@ -1,6 +1,7 @@
 package server
 
 import (
+	"fmt"
 	"github.com/gin-gonic/gin"
 	"github.com/sangwonl/qnsqnd/pkg/core"
 )
@@ -21,6 +22,6 @@ func InitServer() *Server {
 	}
 }
 
-func (s *Server) Run() error {
-	return s.router.Run(":8080")
+func (s *Server) Run(port uint16) error {
+	return s.router.Run(fmt.Sprintf(":%d", port))
 }
