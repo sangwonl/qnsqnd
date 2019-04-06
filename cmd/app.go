@@ -7,7 +7,7 @@ import (
 
 func main() {
 	s := server.InitServer()
-	if err := s.Run(); err != nil {
+	if err := s.Run(8080); err != nil {
 		fmt.Printf("failed to run server... %s", err)
 	}
 }
