@@ -3,7 +3,7 @@ package core
 import "github.com/satori/go.uuid"
 
 type TopicMsgInbox struct {
-	subscriptions map[SubscriptionId]*Subscription
+	subscriptions *SubscriptionMap
 	queue         chan *TopicMessage
 }
 
@@ -14,7 +14,8 @@ func (i *TopicMsgInbox) addSubscription(s *Subscription) SubscriptionId {
 	}
 
 	s.id = SubscriptionId(uuid.NewV4().String())
-	i.subscriptions[s.id] = s
+	i.subscriptions.put(s.id, s)
+
 	go s.subscriptionQueueDispatcher()
 
 	return s.id
@@ -25,5 +26,5 @@ func (i *TopicMsgInbox) delSubscription(s *Subscription) {
 	if s.outStream != nil {
 		close(s.outStream)
 	}
-	delete(i.subscriptions, s.id)
+	i.subscriptions.del(s.id)
 }

@@ -9,7 +9,7 @@ func (i *TopicMsgInbox) topicQueueDispatcher() {
 	for {
 		m, more := <-i.queue
 		if more {
-			for _, s := range i.subscriptions {
+			for _, s := range i.subscriptions.items() {
 				s.queue <- m
 			}
 		} else {
