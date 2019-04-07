@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -116,6 +117,8 @@ func TestSubAndPubWithoutFilter(t *testing.T) {
 		w, res = reqPostJson("/publish", TopicMessage)
 		assert.Equal(t, 202, w.Code)
 	}
+
+	time.Sleep(1)
 
 	subCancelUrl := fmt.Sprintf("/subscribe/%s/cancel", subId)
 	w, res = reqPostJson(subCancelUrl, "{}")

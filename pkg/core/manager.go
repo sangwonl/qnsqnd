@@ -69,9 +69,18 @@ func (mgr *PubSubManager) Publish(m *TopicMessage) error {
 
 func (mgr *PubSubManager) Stream(subId SubscriptionId) (<-chan *TopicMessage, error) {
 	s := mgr.allSubscriptions.get(subId)
-	if s == nil || s.outStream == nil {
+	if s == nil {
 		return nil, errors.New("no such subscription")
 	}
+
+	if s.Callback != "" {
+		return nil, errors.New("sse not supported")
+	}
+
+	if s.outStream == nil {
+		s.outStream = make(chan *TopicMessage, 100)
+	}
+
 	return s.outStream, nil
 }
 

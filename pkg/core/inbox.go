@@ -10,10 +10,6 @@ type TopicMsgInbox struct {
 func (i *TopicMsgInbox) addSubscription(s *Subscription) SubscriptionId {
 	s.id = SubscriptionId(uuid.NewV4().String())
 	s.queue = make(chan *TopicMessage, 100)
-	if s.Callback == "" {
-		s.outStream = make(chan *TopicMessage, 100)
-	}
-
 	i.subscriptions.put(s.id, s)
 
 	go s.subscriptionQueueDispatcher()
@@ -23,6 +19,7 @@ func (i *TopicMsgInbox) addSubscription(s *Subscription) SubscriptionId {
 
 func (i *TopicMsgInbox) delSubscription(s *Subscription) {
 	i.subscriptions.del(s.id)
+
 	if s.outStream != nil {
 		close(s.outStream)
 	}
