@@ -42,12 +42,11 @@ N/A
 
 ## Contributing
 
-#### Pull Request
+#### Unit Test
 
-If you have any issue to contribute, please
-- checkout a new branch (usually named as `issues/10-xxx`)
-- make some commits and pull request to `master` as base branch
-
+```
+go test ./pkg/...
+```
 
 #### Load Test
 
@@ -62,3 +61,9 @@ And then make load to the host which subscribers connect to with `publish` opera
 ```
 HOST=localhost:8080 TOPIC=basic-topic k6 run --vus 20 --duration 5s test/loadtest/publisher_basic.js
 ```
+
+#### Pull Request
+
+If you have any issue to contribute, please
+- checkout a new branch (usually named as `issues/10-xxx`)
+- make some commits and pull request to `master` as base branch
