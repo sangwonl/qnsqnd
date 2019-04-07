@@ -2,6 +2,7 @@
 
 **qnsqnd** is a simple pub-sub broker over http. 
 
+![](./assets/demo.gif)
 
 ## Warning
 
