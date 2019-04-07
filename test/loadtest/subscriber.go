@@ -27,11 +27,10 @@ func main() {
 	log.Printf("Topic to subscribe: %s\n", *topic)
 	log.Printf("Expression to filter message: %s\n", *filter)
 
-	tr := http.Transport{
+	r := resty.New().SetTransport(&http.Transport{
 		MaxIdleConns: *concurrency,
 		MaxIdleConnsPerHost: *concurrency,
-	}
-	r := resty.New().SetTransport(&tr)
+	})
 
 	var wg sync.WaitGroup
 
