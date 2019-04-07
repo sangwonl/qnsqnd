@@ -10,7 +10,7 @@ func (i *TopicMsgInbox) topicQueueDispatcher() {
 		m, more := <-i.queue
 		if more {
 			for _, s := range i.subscriptions.items() {
-				s.queue <- m
+				s.enqueue(m)
 			}
 		} else {
 			break
@@ -33,7 +33,7 @@ func (s *Subscription) processDelivery(m *TopicMessage) {
 		if err != nil {
 			fmt.Print(err)
 		}
-	} else if s.outStream != nil {
+	} else if s.outStream != nil && !isTopicMsgChannelClosed(s.outStream) {
 		s.outStream <- m
 	}
 }

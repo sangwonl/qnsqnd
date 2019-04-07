@@ -27,6 +27,12 @@ func (s Subscription) validate() bool {
 	return s.Topic != ""
 }
 
+func (s *Subscription) enqueue(m *TopicMessage) {
+	if !isTopicMsgChannelClosed(s.queue) {
+		s.queue <- m
+	}
+}
+
 type TopicInboxMap struct {
 	mutex sync.RWMutex
 	table map[Topic]*TopicMsgInbox
@@ -93,3 +99,4 @@ func (s *SubscriptionMap) items() []*Subscription {
 	}
 	return items
 }
+

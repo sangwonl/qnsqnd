@@ -39,17 +39,6 @@ func (mgr *PubSubManager) Subscribe(s *Subscription) (SubscriptionId, error) {
 	return subId, nil
 }
 
-func (mgr *PubSubManager) Publish(m *TopicMessage) error {
-	if !m.validate() || mgr.getTopicMsgInbox(m.Topic) == nil {
-		return errors.New("invalid Topic message data")
-	}
-
-	if inbox := mgr.getTopicMsgInbox(m.Topic); inbox != nil {
-		inbox.queue <- m
-	}
-	return nil
-}
-
 func (mgr *PubSubManager) Unsubscribe(subId SubscriptionId) error {
 	s := mgr.allSubscriptions.get(subId)
 	if s == nil {
@@ -64,6 +53,17 @@ func (mgr *PubSubManager) Unsubscribe(subId SubscriptionId) error {
 	inbox.delSubscription(s)
 	mgr.allSubscriptions.del(subId)
 
+	return nil
+}
+
+func (mgr *PubSubManager) Publish(m *TopicMessage) error {
+	if !m.validate() || mgr.getTopicMsgInbox(m.Topic) == nil {
+		return errors.New("invalid Topic message data")
+	}
+
+	if inbox := mgr.getTopicMsgInbox(m.Topic); inbox != nil {
+		inbox.queue <- m
+	}
 	return nil
 }
 
